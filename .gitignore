@@ -1,0 +1,12 @@
+.env
+.env.*
+*.pem
+*.key
+*.p12
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+.venv/
+_repo_doctor/
+benchmark-results.local.json

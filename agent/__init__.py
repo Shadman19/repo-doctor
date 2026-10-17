@@ -1,1 +1,1 @@
-# Empty on purpose
+"""Repo Doctor security scanning and remediation package."""
