@@ -181,6 +181,10 @@ Important limitations:
 - Bedrock-generated guidance can be wrong; deterministic scanner evidence and human review remain authoritative.
 - Repo Doctor is a research/engineering prototype, not a replacement for enterprise secret scanning, SAST, software-composition analysis, or incident response.
 
+## Reviewer-friendly case study
+
+For the engineering question, trust boundaries, reproducible measurements, and outstanding evaluation gaps, read the [short security case study](docs/security-case-study.md).
+
 ## References
 
 - Amazon Bedrock Converse API: https://docs.aws.amazon.com/boto3/latest/reference/services/bedrock-runtime/client/converse.html
