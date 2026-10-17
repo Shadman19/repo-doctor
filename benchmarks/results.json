@@ -1,0 +1,22 @@
+{
+  "benchmark": "repo-doctor-synthetic-secret-benchmark-v1",
+  "cases": 14,
+  "expected_findings": 8,
+  "expected_not_observed": [],
+  "f1": 1.0,
+  "false_negatives": 0,
+  "false_positives": 0,
+  "notes": [
+    "All credentials are synthetic examples and must never be used as real credentials.",
+    "This benchmark covers deterministic secret-pattern detection and remediation coverage only.",
+    "Dependency vulnerability results are intentionally excluded because advisory databases change over time.",
+    "A perfect synthetic score is not evidence of production security effectiveness."
+  ],
+  "observed_findings": 8,
+  "observed_not_expected": [],
+  "precision": 1.0,
+  "recall": 1.0,
+  "redaction_pass": true,
+  "remediation_coverage": 1.0,
+  "true_positives": 8
+}
