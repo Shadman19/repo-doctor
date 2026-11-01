@@ -17,6 +17,9 @@
 - hallucinated vulnerabilities or fixes;
 - destructive remediation commands;
 - dependency-scanner or SBOM-tool failure;
+- requirements files requesting builds, external URLs, nested includes or custom indexes;
+- repository symlinks redirecting artifact writes or reads outside the checkout;
+- repository-supplied SBOM files being mistaken for generated output;
 - users treating a synthetic benchmark score as production evidence.
 
 ## Controls
@@ -24,6 +27,9 @@
 - safe zip extraction and symlink rejection;
 - HTTPS Git host allow-list and no embedded credentials;
 - file-size, file-type, and directory exclusions;
+- exact-pin requirements parsing and private sanitized inputs, with pip resolution disabled;
+- fresh artifact directories outside the checkout and rejection of symlinked requirements/license inputs;
+- explicit skipped, partial and failed dependency-check statuses;
 - raw-match redaction and non-reversible fingerprints;
 - deterministic scanner as source of truth;
 - Bedrock input field allow-list;

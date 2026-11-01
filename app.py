@@ -104,6 +104,8 @@ def _run_all(
         "findings": findings,
         "remediation_plan": remediation_plan,
         "sbom_path": licenses.get("sbom_path"),
+        "dependency_audit": deps.get("pip_audit", {}),
+        "sbom_result": licenses.get("sbom_result", {}),
     }
 
 
@@ -137,6 +139,15 @@ if run_btn:
 
     st.success("Scan complete.")
     st.write(out["summary"])
+    for label, check in [
+        ("Dependency audit", out["dependency_audit"]),
+        ("SBOM generation", out["sbom_result"]),
+    ]:
+        status = check.get("status", "unknown")
+        if status != "complete":
+            detail = check.get("info") or check.get("error") or "The check did not complete."
+            st.warning(f"{label}: {status}. {detail}")
+    st.caption("Dependency checks cover declared exact package pins without resolving transitive dependencies.")
 
     findings = out["findings"]
     severity_counts: dict[str, int] = {}

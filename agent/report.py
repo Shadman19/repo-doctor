@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -15,10 +16,9 @@ def _count_vulnerabilities(deps: dict[str, Any]) -> tuple[int, int]:
     dependencies = pip_audit.get("dependencies", [])
     if not isinstance(dependencies, list):
         return 0, 0
-    vulnerability_count = sum(
-        len(dep.get("vulns", []) or []) for dep in dependencies if isinstance(dep, dict)
-    )
-    return len(dependencies), vulnerability_count
+    audited = [dep for dep in dependencies if isinstance(dep, dict) and not dep.get("skip_reason")]
+    vulnerability_count = sum(len(dep.get("vulns", []) or []) for dep in audited)
+    return len(audited), vulnerability_count
 
 
 def _sarif_level(severity: str) -> str:
@@ -79,8 +79,8 @@ def summarize(
     findings = findings or []
     remediation_plan = remediation_plan or {}
 
-    outdir = Path(repo_dir) / "_repo_doctor"
-    outdir.mkdir(exist_ok=True, parents=True)
+    # Repository-controlled symlinks must never choose artifact destinations.
+    outdir = Path(tempfile.mkdtemp(prefix="repo-doctor-report-"))
     sarif_path = outdir / "report.sarif"
     pdf_path = outdir / "report.pdf"
 
@@ -103,6 +103,11 @@ def summarize(
     sarif_path.write_text(json.dumps(sarif, indent=2), encoding="utf-8")
 
     dependency_count, vulnerability_count = _count_vulnerabilities(deps)
+    audit = deps.get("pip_audit", {})
+    audit_status = audit.get("status", "unknown") if isinstance(audit, dict) else "unknown"
+    audit_detail = (audit.get("info") or audit.get("error")) if isinstance(audit, dict) else ""
+    sbom_result = licenses.get("sbom_result", {})
+    sbom_status = sbom_result.get("status", "unknown")
     severity_counts: dict[str, int] = {}
     for finding in findings:
         severity = str(finding.get("severity", "info"))
@@ -148,7 +153,13 @@ def summarize(
     )
     line(f"Possible secrets: {len(secrets.get('secrets', []))}")
     line(f"Python dependencies audited: {dependency_count}; vulnerability records: {vulnerability_count}")
+    line(f"Dependency audit status: {audit_status}")
+    if audit_detail:
+        line(str(audit_detail))
     line(f"SBOM generated: {'yes' if licenses.get('sbom_path') else 'no'}")
+    line(f"SBOM generation status: {sbom_status}")
+    if sbom_result.get("info"):
+        line(str(sbom_result["info"]))
     line(f"Remediation provider: {remediation_plan.get('provider', 'not generated')}")
     line("Raw secrets are redacted; no remediation is automatically applied.")
 
@@ -176,7 +187,8 @@ def summarize(
     summary = (
         f"Scan complete. Findings: {len(findings)}; secrets: {len(secrets.get('secrets', []))}; "
         f"dependency vulnerability records: {vulnerability_count}; "
-        f"SBOM: {'yes' if licenses.get('sbom_path') else 'no'}; "
+        f"dependency audit: {audit_status}; "
+        f"SBOM: {'yes' if licenses.get('sbom_path') else 'no'} ({sbom_status}); "
         f"remediation: {remediation_plan.get('provider', 'none')}."
     )
     return str(sarif_path), str(pdf_path), summary

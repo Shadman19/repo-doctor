@@ -42,7 +42,7 @@ Open the Streamlit app and choose a **small public repository** or a **synthetic
 
 | Check | Evidence | Scope |
 |---|---|---|
-| Unit tests | **13/13 pass** (local, confirmed by repository owner) | Scanner, redaction, response validation, fallback, reports |
+| Unit tests | **33/33 pass** (local hardening validation) | Scanner, redaction, response validation, fallback, reports, inert requirements inputs and artifact isolation |
 | GitHub Actions | CI succeeded for the initial v2 PR commit | Automated Python tests + synthetic benchmark |
 | Secret benchmark | **14 cases: 8 positives, 6 negatives** | Small fixed synthetic regression suite |
 | Detection | TP=8, FP=0, FN=0; precision/recall/F1=1.000 | **Not** production accuracy |
@@ -51,6 +51,8 @@ Open the Streamlit app and choose a **small public repository** or a **synthetic
 | Bedrock runtime | **Not tested against a live AWS account** | Fake-client tests of interface and validation |
 
 Saved benchmark: [`benchmarks/results.json`](../benchmarks/results.json). Implementation and other limitations: [README](../README.md), [architecture](aws-architecture.md), [threat model](threat-model.md).
+
+The hardening pass restricts dependency checks to sanitized exact package pins, disables pip resolution, and writes generated artifacts outside the checkout. Unsupported requirements and failed checks are reported explicitly. A live one-package smoke check completed with pip-audit 2.10.1 and generated a one-component CycloneDX SBOM with cyclonedx-bom 7.6.0. This checks tool integration, not detection accuracy or remediation effectiveness; live Bedrock remains untested.
 
 ### Failure analysis and next experiments
 
