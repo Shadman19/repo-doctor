@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
+
 # These patterns intentionally identify likely credentials. Findings are always
 # redacted before leaving the scanner; the raw match is never returned.
 SECRET_PATTERNS: list[tuple[str, str, str]] = [
@@ -235,27 +239,89 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 180) -> dict[str, Any]:
         }
 
 
-def audit_deps(repo_dir: Path) -> dict[str, Any]:
-    requirements = repo_dir / "requirements.txt"
-    if not requirements.exists():
-        return {"pip_audit": {"info": "No requirements.txt found"}}
+def _pinned_requirements(repo_dir: Path) -> str:
+    """Read inert package pins, never pip options, includes, paths or URLs.
 
-    result = _run(
-        ["pip-audit", "-r", "requirements.txt", "-f", "json", "--progress-spinner", "off"],
-        repo_dir,
-    )
-    parsed: Any
+    External tools receive a newly written copy outside the scanned repository.
+    Unsupported inputs fail closed rather than invoking dependency resolution.
+    """
+    requirements = repo_dir / "requirements.txt"
+    if requirements.is_symlink():
+        raise ValueError("Symlinked requirements.txt is not supported.")
+    if not requirements.exists():
+        raise ValueError("No requirements.txt found.")
+    if not requirements.is_file():
+        raise ValueError("requirements.txt must be a regular file.")
+    with requirements.open("rb") as handle:
+        content = handle.read(MAX_TEXT_FILE_BYTES + 1)
+    if len(content) > MAX_TEXT_FILE_BYTES:
+        raise ValueError("requirements.txt exceeds the text-file size limit.")
     try:
-        parsed = json.loads(result["stdout"].strip())
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("requirements.txt must be UTF-8 text.") from exc
+
+    pins: list[str] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        error = f"Unsupported requirement on line {line_number}; only exact name==version pins are supported."
+        try:
+            requirement = Requirement(line)
+        except InvalidRequirement as exc:
+            raise ValueError(error) from exc
+        specifiers = list(requirement.specifier)
+        if requirement.url or len(specifiers) != 1 or specifiers[0].operator != "==":
+            raise ValueError(error)
+        try:
+            version = Version(specifiers[0].version)
+        except InvalidVersion as exc:
+            raise ValueError(error) from exc
+        if requirement.marker is None or requirement.marker.evaluate():
+            pins.append(f"{canonicalize_name(requirement.name)}=={version}")
+    if not pins:
+        raise ValueError("No active exact package pins found in requirements.txt.")
+    return "\n".join(pins) + "\n"
+
+
+def audit_deps(repo_dir: Path) -> dict[str, Any]:
+    try:
+        pins = _pinned_requirements(repo_dir)
+    except (OSError, ValueError) as exc:
+        return {"pip_audit": {"status": "skipped", "info": str(exc), "dependencies": []}}
+
+    with tempfile.TemporaryDirectory(prefix="repo-doctor-audit-") as tmp:
+        work = Path(tmp)
+        requirements = work / "requirements.txt"
+        requirements.write_text(pins, encoding="utf-8")
+        result = _run(
+            [
+                "pip-audit", "-r", str(requirements), "--no-deps", "--disable-pip",
+                "-f", "json", "--progress-spinner", "off",
+            ],
+            work,
+        )
+    try:
+        if result["returncode"] not in (0, 1):
+            raise ValueError("pip-audit did not complete.")
+        parsed = json.loads(result["stdout"])
         if isinstance(parsed, list):
             parsed = {"dependencies": parsed}
-        if not isinstance(parsed, dict):
-            parsed = {"raw": parsed}
-    except Exception:
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("dependencies"), list):
+            raise ValueError("Invalid dependency results.")
+        if not all(isinstance(dep, dict) for dep in parsed["dependencies"]):
+            raise ValueError("Invalid dependency record.")
+        parsed["status"] = "partial" if any(
+            dep.get("skip_reason") for dep in parsed["dependencies"]
+        ) else "complete"
+        parsed["info"] = "Only declared exact package pins were audited; transitive dependencies were not resolved."
+    except (ValueError, TypeError):
         parsed = {
-            "error": "pip-audit output could not be parsed",
+            "status": "failed",
+            "error": "pip-audit failed or returned invalid output.",
             "returncode": result["returncode"],
-            "stderr": result["stderr"][-2000:],
+            "dependencies": [],
         }
     return {"pip_audit": parsed}
 
@@ -297,26 +363,39 @@ def _generate_sbom(repo_dir: Path, requirements: Path, sbom_path: Path) -> dict[
 
 
 def sbom_and_licenses(repo_dir: Path) -> dict[str, Any]:
-    sbom_path = repo_dir / "_repo_doctor" / "sbom.json"
-    sbom_path.parent.mkdir(exist_ok=True, parents=True)
-    requirements = repo_dir / "requirements.txt"
-    if requirements.exists():
-        sbom_result = _generate_sbom(repo_dir, requirements, sbom_path)
+    # Never trust repository-owned output paths or existing SBOM files.
+    sbom_path: Path | None = None
+    try:
+        pins = _pinned_requirements(repo_dir)
+    except (OSError, ValueError) as exc:
+        sbom_result = {"ok": False, "status": "skipped", "info": str(exc)}
     else:
-        sbom_result = {"ok": False, "info": "No requirements.txt found"}
+        output = Path(tempfile.mkdtemp(prefix="repo-doctor-sbom-"))
+        candidate = output / "sbom.json"
+        with tempfile.TemporaryDirectory(prefix="repo-doctor-sbom-input-") as tmp:
+            work = Path(tmp)
+            requirements = work / "requirements.txt"
+            requirements.write_text(pins, encoding="utf-8")
+            sbom_result = _generate_sbom(work, requirements, candidate)
+        sbom_result["status"] = "complete" if sbom_result["ok"] else "failed"
+        if sbom_result["ok"]:
+            sbom_path = candidate
+        else:
+            shutil.rmtree(output)
 
     licenses: list[dict[str, str]] = []
     for candidate in ["LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING", "COPYING.txt"]:
         path = repo_dir / candidate
-        if path.exists() and path.is_file():
+        if not path.is_symlink() and path.is_file():
             try:
-                content = path.read_text(encoding="utf-8", errors="ignore")[:4_000]
+                with path.open("rb") as handle:
+                    content = handle.read(4_000).decode("utf-8", errors="ignore")
             except Exception:
                 content = ""
             licenses.append({"file": candidate, "preview": content})
 
     return {
-        "sbom_path": str(sbom_path) if sbom_path.exists() else None,
+        "sbom_path": str(sbom_path) if sbom_path else None,
         "sbom_result": sbom_result,
         "licenses": licenses,
     }

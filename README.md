@@ -63,7 +63,7 @@ streamlit run app.py
 
 **What to demonstrate in the UI:** scan a small **public** test repository or a deliberately synthetic ZIP. Point to the normalized findings with file/line information and redacted evidence, then show the human-reviewed remediation recommendations. Export the **SARIF**, **PDF**, **remediation JSON** and conservative patch recommendations. Neither the report nor the language model should receive a real credential. The UI has a Bedrock toggle, but live AWS validation is not part of the checked results.
 
-**What the results actually show:** The [saved results](benchmarks/results.json) cover **14 synthetic cases** (8 expected detections, 6 negative controls). This regression set gives 8 true positives, 0 false positives and 0 false negatives, with **1.000 precision, recall and F1** and passing raw-value redaction. Local `pytest` also passed **13/13 tests**. These are controlled software tests, **not** a measure of field performance or a claim that Bedrock has been used with a live AWS account.
+**What the results actually show:** The [saved results](benchmarks/results.json) cover **14 synthetic cases** (8 expected detections, 6 negative controls). This regression set gives 8 true positives, 0 false positives and 0 false negatives, with **1.000 precision, recall and F1** and passing raw-value redaction. The hardened branch passes **33/33 local tests**, including requirements-input, artifact-isolation and check-status regressions. These are controlled software tests, **not** a measure of field performance or a claim that Bedrock has been used with a live AWS account.
 
 ### 60-second technical explanation
 
@@ -83,12 +83,14 @@ The central research question is whether an LLM can make **security findings mor
 - Bedrock output is parsed as JSON, restricted to existing finding IDs, checked for required verification steps, and never auto-applied.
 - If Bedrock fails or returns invalid output, Repo Doctor falls back to deterministic guidance.
 - Remediation is always marked `auto_apply: false`.
+- Dependency tools receive a sanitized copy of exact package pins in a private working directory. Pip-based resolution is disabled; repository build code, includes, URLs, editable installs, and index options are not passed to the tools.
+- SARIF, PDF and SBOM artifacts are written to fresh temporary directories outside the scanned repository. Repository symlinks and pre-existing artifacts cannot select the output paths.
 
 ## What it checks
 
 - **Possible secrets:** AWS keys, Google API keys, Slack tokens, GitHub PATs, private-key headers, Stripe keys, and common literal `secret_key` assignments.
-- **Python dependency vulnerabilities:** `pip-audit` against `requirements.txt`.
-- **SBOM:** CycloneDX JSON for Python requirements when supported by the installed tool version.
+- **Python dependency vulnerabilities:** `pip-audit --no-deps --disable-pip` against sanitized `name==version` entries from `requirements.txt`. Only the declared pins are checked; transitive dependencies are not resolved.
+- **SBOM:** CycloneDX JSON from those same sanitized pins when supported by the installed tool version.
 - **License policy flags:** optional GPL/AGPL detection from top-level license files.
 
 ## Outputs
@@ -98,6 +100,8 @@ The central research question is whether an LLM can make **security findings mor
 - JSON remediation plan
 - CycloneDX SBOM when available
 - conservative unified-diff suggestions
+
+Dependency and SBOM checks are explicitly **skipped** when requirements contain ranges, wildcards, hashes, nested includes, paths, URLs, or pip options. They also skip symlinked requirements files. Comments and environment markers are supported; extras do not trigger dependency resolution. Skipped, partial and failed checks are shown in the UI and reports, so an incomplete scan is not presented as a successful dependency audit. Provide a reviewed file of exact package pins to enable these checks. This restriction follows [pip-audit's security model](https://github.com/pypa/pip-audit#security-model): resolving untrusted requirements can execute package build code.
 
 ## Run locally
 
